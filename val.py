@@ -39,6 +39,7 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 from models.common import DetectMultiBackend
 from utils.callbacks import Callbacks
 from utils.dataloaders import create_dataloader
+from utils.custom_dataloaders import create_webdataloader
 from utils.general import (
     LOGGER,
     TQDM_BAR_FORMAT,
@@ -147,9 +148,13 @@ def run(
     plots=True,
     callbacks=Callbacks(),
     compute_loss=None,
+    use_webds=False,
+    cache_path='./webdataset_cache'
 ):
     # Initialize/load model and set device
     training = model is not None
+    # print(f"HELLO{training}!", batch_size)
+
     if training:  # called by train.py
         device, pt, jit, engine = next(model.parameters()).device, True, False, False  # get model device, PyTorch model
         half &= device.type != "cpu"  # half precision only supported on CUDA
@@ -196,17 +201,31 @@ def run(
         model.warmup(imgsz=(1 if pt else batch_size, 3, imgsz, imgsz))  # warmup
         pad, rect = (0.0, False) if task == "speed" else (0.5, pt)  # square inference for benchmarks
         task = task if task in ("train", "val", "test") else "val"  # path to train/val/test images
-        dataloader = create_dataloader(
-            data[task],
-            imgsz,
-            batch_size,
-            stride,
-            single_cls,
-            pad=pad,
-            rect=rect,
-            workers=workers,
-            prefix=colorstr(f"{task}: "),
-        )[0]
+        if use_webds:
+            dataloader = create_webdataloader(
+                data[task],
+                imgsz,
+                batch_size,
+                stride,
+                single_cls,
+                pad=pad,
+                rect=rect,
+                workers=workers,
+                prefix=colorstr(f"{task}: "),
+                cache_path='./webdataset_cache'
+            )[0]
+        else:
+            dataloader = create_dataloader(
+                data[task],
+                imgsz,
+                batch_size,
+                stride,
+                single_cls,
+                pad=pad,
+                rect=rect,
+                workers=workers,
+                prefix=colorstr(f"{task}: "),
+            )[0]
 
     seen = 0
     confusion_matrix = ConfusionMatrix(nc=nc)
@@ -387,6 +406,10 @@ def parse_opt():
     parser.add_argument("--exist-ok", action="store_true", help="existing project/name ok, do not increment")
     parser.add_argument("--half", action="store_true", help="use FP16 half-precision inference")
     parser.add_argument("--dnn", action="store_true", help="use OpenCV DNN for ONNX inference")
+    
+    parser.add_argument("--use-webds", action="store_true", help="My arg to use web dataset")
+    parser.add_argument("--cache-path", type=str, help="Where to store labels cache for webdataset")
+
     opt = parser.parse_args()
     opt.data = check_yaml(opt.data)  # check YAML
     opt.save_json |= opt.data.endswith("coco.yaml")

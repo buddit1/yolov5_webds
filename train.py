@@ -26,7 +26,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 try:
-    import comet_ml  # must be imported before torch (if installed)
+    import comet_ml  # type: ignore # must be imported before torch (if installed)
 except ImportError:
     comet_ml = None
 
@@ -51,6 +51,7 @@ from utils.autoanchor import check_anchors
 from utils.autobatch import check_train_batch_size
 from utils.callbacks import Callbacks
 from utils.dataloaders import create_dataloader
+from utils.custom_dataloaders import create_webdataloader
 from utils.downloads import attempt_download, is_url
 from utils.general import (
     LOGGER,
@@ -100,7 +101,7 @@ WORLD_SIZE = int(os.getenv("WORLD_SIZE", 1))
 GIT_INFO = check_git_info()
 
 
-def train(hyp, opt, device, callbacks):
+def train(hyp, opt, device, callbacks, use_webds=False):
     """
     Trains YOLOv5 model with given hyperparameters, options, and device, managing datasets, model architecture, loss
     computation, and optimizer steps.
@@ -250,45 +251,82 @@ def train(hyp, opt, device, callbacks):
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
         LOGGER.info("Using SyncBatchNorm()")
 
-    # Trainloader
-    train_loader, dataset = create_dataloader(
-        train_path,
-        imgsz,
-        batch_size // WORLD_SIZE,
-        gs,
-        single_cls,
-        hyp=hyp,
-        augment=True,
-        cache=None if opt.cache == "val" else opt.cache,
-        rect=opt.rect,
-        rank=LOCAL_RANK,
-        workers=workers,
-        image_weights=opt.image_weights,
-        quad=opt.quad,
-        prefix=colorstr("train: "),
-        shuffle=True,
-        seed=opt.seed,
-    )
+    if use_webds:
+        train_loader, dataset = create_webdataloader(
+            train_path,
+            imgsz,
+            batch_size // WORLD_SIZE,
+            gs,
+            single_cls,
+            hyp=hyp,
+            augment=True,
+            cache=None if opt.cache == "val" else opt.cache,
+            rect=opt.rect,
+            rank=LOCAL_RANK,
+            workers=workers,
+            image_weights=opt.image_weights,
+            quad=opt.quad,
+            prefix=colorstr("train: "),
+            seed=opt.seed,
+            cache_path=opt.cache_path
+        )
+    else:
+        # Trainloader
+        train_loader, dataset = create_dataloader(
+            train_path,
+            imgsz,
+            batch_size // WORLD_SIZE,
+            gs,
+            single_cls,
+            hyp=hyp,
+            augment=True,
+            cache=None if opt.cache == "val" else opt.cache,
+            rect=opt.rect,
+            rank=LOCAL_RANK,
+            workers=workers,
+            image_weights=opt.image_weights,
+            quad=opt.quad,
+            prefix=colorstr("train: "),
+            shuffle=True,
+            seed=opt.seed,
+        )
     labels = np.concatenate(dataset.labels, 0)
     mlc = int(labels[:, 0].max())  # max label class
     assert mlc < nc, f"Label class {mlc} exceeds nc={nc} in {data}. Possible class labels are 0-{nc - 1}"
 
     # Process 0
     if RANK in {-1, 0}:
-        val_loader = create_dataloader(
-            val_path,
-            imgsz,
-            batch_size // WORLD_SIZE * 2,
-            gs,
-            single_cls,
-            hyp=hyp,
-            cache=None if noval else opt.cache,
-            rect=True,
-            rank=-1,
-            workers=workers * 2,
-            pad=0.5,
-            prefix=colorstr("val: "),
-        )[0]
+        if use_webds:
+                val_loader = create_webdataloader(
+                val_path,
+                imgsz,
+                batch_size // WORLD_SIZE * 2,
+                gs,
+                single_cls,
+                hyp=hyp,
+                cache=None if noval else opt.cache,
+                rect=True,
+                rank=-1,
+                workers=workers * 2,
+                pad=0.5,
+                prefix=colorstr("val: "),
+                cache_path=opt.cache_path
+            )[0]
+        else:
+            val_loader = create_dataloader(
+                val_path,
+                imgsz,
+                batch_size // WORLD_SIZE * 2,
+                gs,
+                single_cls,
+                hyp=hyp,
+                cache=None if noval else opt.cache,
+                rect=True,
+                rank=-1,
+                workers=workers * 2,
+                pad=0.5,
+                prefix=colorstr("val: "),
+            )[0]
 
         if not resume:
             if not opt.noautoanchor:
@@ -354,7 +392,8 @@ def train(hyp, opt, device, callbacks):
             pbar = tqdm(pbar, total=nb, bar_format=TQDM_BAR_FORMAT)  # progress bar
         optimizer.zero_grad()
         for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
-            callbacks.run("on_train_batch_start")
+            # breakpoint()
+            # callbacks.run("on_train_batch_start")
             ni = i + nb * epoch  # number integrated batches (since train start)
             imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
 
@@ -435,6 +474,7 @@ def train(hyp, opt, device, callbacks):
                     plots=False,
                     callbacks=callbacks,
                     compute_loss=compute_loss,
+                    use_webds=use_webds
                 )
 
             # Update best mAP
@@ -500,6 +540,7 @@ def train(hyp, opt, device, callbacks):
                         plots=plots,
                         callbacks=callbacks,
                         compute_loss=compute_loss,
+                        use_webds=use_webds
                     )  # val best model with plots
                     if is_coco:
                         callbacks.run("on_fit_epoch_end", list(mloss) + list(results) + lr, epoch, best_fitness, fi)
@@ -562,6 +603,9 @@ def parse_opt(known=False):
     parser.add_argument("--ndjson-console", action="store_true", help="Log ndjson to console")
     parser.add_argument("--ndjson-file", action="store_true", help="Log ndjson to file")
 
+    parser.add_argument("--use-webds", action="store_true", help="My arg to use web dataset")
+    parser.add_argument("--cache-path", type=str, help="Where to store labels cache for webdataset")
+    
     return parser.parse_known_args()[0] if known else parser.parse_args()
 
 
@@ -619,8 +663,9 @@ def main(opt, callbacks=Callbacks()):
         )
 
     # Train
+    use_webds = opt.use_webds
     if not opt.evolve:
-        train(opt.hyp, opt, device, callbacks)
+        train(opt.hyp, opt, device, callbacks, use_webds)
 
     # Evolve hyperparameters (optional)
     else:
