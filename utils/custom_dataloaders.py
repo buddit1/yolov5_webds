@@ -27,6 +27,7 @@ from tqdm import tqdm
 
 import tarfile
 import webdataset as wds
+import braceexpand
 
 from utils.augmentations import (
     Albumentations,
@@ -136,18 +137,18 @@ def create_webdataloader(
 def process_batch_dict(f):
     f['jpg'] = np.array(f['jpg'])
     if 'txt' not in f.keys():
-        f['txt'] = []
+        f['txt'] = ''
     f['path'] = os.path.join(f['__url__'], f['__key__'])
     return f
 
 def labels_from_str(label_str: str):
-    labels = []
-    for line in label_str.splitlines():
-        labels.append([float(num) for num in line.strip().split()])
-    labels = np.array(labels, dtype=np.float32)
-    # if labels.shape != (1, 5):
-    #     print("hi")
-    #     breakpoint()
+    if label_str == '':
+        labels = np.empty((0, 5), dtype=np.float32)
+    else:
+        labels = []
+        for line in label_str.splitlines():
+            labels.append([float(num) for num in line.strip().split()])
+        labels = np.array(labels, dtype=np.float32)
     return labels
 
 def webdataset_collate_fn(batch):
@@ -192,7 +193,6 @@ class WebDatasetLoadImagesAndLabels(IterableDataset):
         self.pad = pad
         self.path = path
         self.albumentations = Albumentations(size=img_size) if augment else None
-
         self.web_dataset = wds.WebDataset(
             urls=path
         ).shuffle(1000
@@ -207,10 +207,11 @@ class WebDatasetLoadImagesAndLabels(IterableDataset):
         self.im_files = dict()
         try:
             f = []
-            for tarpath in path if isinstance(path, list) else [path]:
-                with tarfile.open(tarpath) as tarf:
-                    f += tarf.getnames()
-                self.im_files[tarpath] = sorted(x.replace("/", os.sep) for x in f if x.split(".")[-1].lower() in IMG_FORMATS)
+            for tarpath_family in path if isinstance(path, list) else [path]:
+                for tarpath in braceexpand.braceexpand(tarpath_family):
+                    with tarfile.open(tarpath) as tarf:
+                        f += tarf.getnames()
+                    self.im_files[tarpath] = sorted(x.replace("/", os.sep) for x in f if x.split(".")[-1].lower() in IMG_FORMATS)
             assert self.im_files, f"{prefix}No images found"
         except Exception as e:
             raise Exception(f"{prefix}Error loading data from {path}: {e}\n{HELP_URL}") from e
@@ -298,21 +299,22 @@ class WebDatasetLoadImagesAndLabels(IterableDataset):
             irect = ar.argsort()
             self.im_files = dict()
             self.label_files = dict()
-            for tarpath in path if isinstance(path, list) else [path]:
-                with tarfile.open(tarpath) as f:
-                    for path in f.getnames():
-                        if path.endswith('.jpg') or path.endswith('.jpeg'):
-                            if tarpath not in self.im_files.keys():
-                                self.im_files[tarpath] = [path]
+            for tarpath_family in path if isinstance(path, list) else [path]:
+                for tarpath in braceexpand.braceexpand(tarpath_family):
+                    with tarfile.open(tarpath) as f:
+                        for path in f.getnames():
+                            if path.endswith('.jpg') or path.endswith('.jpeg'):
+                                if tarpath not in self.im_files.keys():
+                                    self.im_files[tarpath] = [path]
+                                else:
+                                    self.im_files[tarpath].append(path)
+                            elif path.endswith('.txt'):
+                                if tarpath not in self.label_files.keys():
+                                    self.label_files[tarpath] = [path]
+                                else:
+                                    self.label_files[tarpath].append(path)
                             else:
-                                self.im_files[tarpath].append(path)
-                        elif path.endswith('.txt'):
-                            if tarpath not in self.label_files.keys():
-                                self.label_files[tarpath] = [path]
-                            else:
-                                self.label_files[tarpath].append(path)
-                        else:
-                            raise ValueError(f"Unsupported file extension on file: {os.path.join(tarpath, path)}")
+                                raise ValueError(f"Unsupported file extension on file: {os.path.join(tarpath, path)}")
             # self.im_files = [self.im_files[i] for i in irect]
             # self.label_files = [self.label_files[i] for i in irect]
             self.labels = [self.labels[i] for i in irect]
@@ -363,27 +365,27 @@ class WebDatasetLoadImagesAndLabels(IterableDataset):
                 with tarfile.open(tarpath) as f:
                     f.extractall(tmpdir)
                     with Pool(NUM_THREADS) as pool:
-                        pbar = tqdm(
-                            pool.imap(verify_image_label, zip(repeat(tmpdir), self.im_files[tarpath], self.label_files[tarpath], repeat(prefix))),
-                            desc=desc,
-                            total=len(self.im_files[tarpath]),
-                            bar_format=TQDM_BAR_FORMAT,
-                        )
-                        # results = [[] for _ in range(9)]
-                        # for args in zip(repeat(tmpdir), self.im_files[tarpath], self.label_files[tarpath], repeat(prefix)):
-                        #     im_file, lb, shape, segments, nm_f, nf_f, ne_f, nc_f, msg = verify_image_label(args)
-                        for im_file, lb, shape, segments, nm_f, nf_f, ne_f, nc_f, msg in pbar:
+                        # pbar = tqdm(
+                        #     pool.imap(verify_image_label, zip(repeat(tmpdir), self.im_files[tarpath], self.label_files[tarpath], repeat(prefix))),
+                        #     desc=desc,
+                        #     total=len(self.im_files[tarpath]),
+                        #     bar_format=TQDM_BAR_FORMAT,
+                        # )
+                        results = [[] for _ in range(9)]
+                        for args in tqdm(zip(repeat(tmpdir), self.im_files[tarpath], self.label_files[tarpath], repeat(prefix))):
+                            im_file, lb, shape, segments, nm_f, nf_f, ne_f, nc_f, msg = verify_image_label(args)
+                        # for im_file, lb, shape, segments, nm_f, nf_f, ne_f, nc_f, msg in pbar:
                             nm += nm_f
                             nf += nf_f
                             ne += ne_f
                             nc += nc_f
                             if im_file:
                                 x[os.path.join(tarpath, im_file)] = [lb, shape, segments]
-                            if msg:
-                                msgs.append(msg)
-                            pbar.desc = f"{desc} {nf} images, {nm + ne} backgrounds, {nc} corrupt"
-
-                pbar.close()
+                            # if msg:
+                            #     msgs.append(msg)
+                        #     pbar.desc = f"{desc} {nf} images, {nm + ne} backgrounds, {nc} corrupt"
+                        # # pool.join()
+                # pbar.close()
         if msgs:
             LOGGER.info("\n".join(msgs))
         if nf == 0:
@@ -803,6 +805,7 @@ class WebDatasetLoadImagesAndLabels(IterableDataset):
 def img2label_paths(img_paths):
     """
     """
+    # breakpoint()
     label_paths = dict()
     for path in img_paths:
         tarpath, img_path = os.path.split(path)
@@ -819,6 +822,7 @@ def verify_image_label(args):
     nm, nf, ne, nc, msg, segments = 0, 0, 0, 0, "", []  # number (missing, found, empty, corrupt), message, segments
     try:
         # verify images
+        # print(tmpdir, im_file, lb_file, prefix)
         with open(os.path.join(tmpdir, im_file), 'rb') as f:
             im = Image.open(f)
             im.verify()  # PIL verify
