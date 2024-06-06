@@ -210,7 +210,7 @@ class WebDatasetLoadImagesAndLabels(IterableDataset):
             for tarpath_family in path if isinstance(path, list) else [path]:
                 for tarpath in braceexpand.braceexpand(tarpath_family):
                     with tarfile.open(tarpath) as tarf:
-                        f += tarf.getnames()
+                        f = tarf.getnames()
                     self.im_files[tarpath] = sorted(x.replace("/", os.sep) for x in f if x.split(".")[-1].lower() in IMG_FORMATS)
             assert self.im_files, f"{prefix}No images found"
         except Exception as e:
