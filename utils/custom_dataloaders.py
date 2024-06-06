@@ -360,7 +360,7 @@ class WebDatasetLoadImagesAndLabels(IterableDataset):
         nm, nf, ne, nc, msgs = 0, 0, 0, 0, []  # number missing, found, empty, corrupt, messages
         # desc = f"{prefix}Scanning {path.parent / path.stem}..."
         desc = 'temp desc'
-        for tarpath in self.im_files.keys():
+        for tarpath in tqdm(self.im_files.keys()):
             with tempfile.TemporaryDirectory() as tmpdir:
                 with tarfile.open(tarpath) as f:
                     f.extractall(tmpdir)
@@ -372,7 +372,7 @@ class WebDatasetLoadImagesAndLabels(IterableDataset):
                         #     bar_format=TQDM_BAR_FORMAT,
                         # )
                         results = [[] for _ in range(9)]
-                        for args in tqdm(zip(repeat(tmpdir), self.im_files[tarpath], self.label_files[tarpath], repeat(prefix))):
+                        for args in zip(repeat(tmpdir), self.im_files[tarpath], self.label_files[tarpath], repeat(prefix)):
                             im_file, lb, shape, segments, nm_f, nf_f, ne_f, nc_f, msg = verify_image_label(args)
                         # for im_file, lb, shape, segments, nm_f, nf_f, ne_f, nc_f, msg in pbar:
                             nm += nm_f
