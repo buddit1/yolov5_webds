@@ -268,7 +268,7 @@ def train(hyp, opt, device, callbacks, use_webds=False):
             quad=opt.quad,
             prefix=colorstr("train: "),
             seed=opt.seed,
-            cache_path=opt.cache_path
+            cache_path=opt.train_cache_path,
         )
     else:
         # Trainloader
@@ -310,7 +310,7 @@ def train(hyp, opt, device, callbacks, use_webds=False):
                 workers=workers * 2,
                 pad=0.5,
                 prefix=colorstr("val: "),
-                cache_path=opt.cache_path
+                cache_path=opt.validation_cache_path,
             )[0]
         else:
             val_loader = create_dataloader(
@@ -604,7 +604,8 @@ def parse_opt(known=False):
     parser.add_argument("--ndjson-file", action="store_true", help="Log ndjson to file")
 
     parser.add_argument("--use-webds", action="store_true", help="My arg to use web dataset")
-    parser.add_argument("--cache-path", type=str, help="Where to store labels cache for webdataset")
+    parser.add_argument("--train-cache-path", type=str, help="Where to store labels cache for webdataset training data")
+    parser.add_argument("--validation-cache-path", type=str, help="Where to store labels cache for webdataset validation data")
     
     return parser.parse_known_args()[0] if known else parser.parse_args()
 

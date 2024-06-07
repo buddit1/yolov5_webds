@@ -112,6 +112,7 @@ def create_webdataloader(
             image_weights=image_weights,
             prefix=prefix,
             rank=rank,
+            cache_path=cache_path
         )
 
     batch_size = min(batch_size, len(dataset))
