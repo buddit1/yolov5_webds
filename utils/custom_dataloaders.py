@@ -95,7 +95,9 @@ def create_webdataloader(
     quad=False,
     prefix="",
     seed=0,
-    cache_path='./webdataset_cache'
+    cache_path='./webdataset_cache',
+    buffer_size=1000,
+    prefetch_factor=2
 ):
     with torch_distributed_zero_first(rank):  # init dataset *.cache only once if DDP
         dataset = WebDatasetLoadImagesAndLabels(
@@ -113,34 +115,46 @@ def create_webdataloader(
             prefix=prefix,
             rank=rank,
             cache_path=cache_path
+            buffer_size=buffer_size
         )
 
     batch_size = min(batch_size, len(dataset))
     nd = torch.cuda.device_count()  # number of CUDA devices
     nw = min([os.cpu_count() // max(nd, 1), batch_size if batch_size > 1 else 0, workers])  # number of workers
     sampler = None #if rank == -1 else SmartDistributedSampler(dataset, shuffle=shuffle)
-    loader = DataLoader #if image_weights #else InfiniteDataLoader  # only DataLoader allows for attribute updates
-    
+    #loader = DataLoader #if image_weights #else InfiniteDataLoader  # only DataLoader allows for attribute updates
+    loader = wds.WebLoader
+
     generator = torch.Generator()
     generator.manual_seed(6148914691236517205 + seed + RANK)
+    #breakpoint()
     return loader(
         dataset,
-        batch_size=None,
+        batch_size=16,
         num_workers=nw,
         sampler=sampler,
         pin_memory=PIN_MEMORY,
-        collate_fn=WebDatasetLoadImagesAndLabels.collate_fn4 if quad else WebDatasetLoadImagesAndLabels.collate_fn,
+        #collate_fn=WebDatasetLoadImagesAndLabels.collate_fn4 if quad else WebDatasetLoadImagesAndLabels.collate_fn,
+        collate_fn=WebDatasetLoadImagesAndLabels.second_collate_webdataset_fn,
         worker_init_fn=seed_worker,
         generator=generator,
-    ), dataset
+        prefetch_factor=prefetch_factor
+        ), dataset #.unbatched().shuffle(buffer_size).batched(batch_size), dataset
 
 
 def process_batch_dict(f):
-    f['jpg'] = np.array(f['jpg'])
-    if 'txt' not in f.keys():
-        f['txt'] = ''
-    f['path'] = os.path.join(f['__url__'], f['__key__'])
-    return f
+    try:
+        if 'jpg' in f.keys():
+            f['jpg'] = np.array(f['jpg'])
+        else:
+            f['jpg'] = np.array(f['0.jpg'])
+        if 'txt' not in f.keys():
+            f['txt'] = ''
+        f['path'] = os.path.join(f['__url__'], f['__key__'])
+        return f
+    except:
+        breakpoint()
+        print('hi')
 
 def labels_from_str(label_str: str):
     if label_str == '':
@@ -155,6 +169,7 @@ def labels_from_str(label_str: str):
 def webdataset_collate_fn(batch):
     # breakpoint()
     images, labels, paths = zip(*batch)  # transposed
+    #breakpoint()
     return images, labels, paths
 
 
@@ -180,7 +195,8 @@ class WebDatasetLoadImagesAndLabels(IterableDataset):
         prefix="",
         rank=-1,
         seed=0,
-        cache_path='./webdataset_cache'
+        cache_path='./webdataset_cache',
+        buffer_size=1000
     ):
         self.img_size = img_size
         self.batch_size = batch_size
@@ -195,8 +211,8 @@ class WebDatasetLoadImagesAndLabels(IterableDataset):
         self.path = path
         self.albumentations = Albumentations(size=img_size) if augment else None
         self.web_dataset = wds.WebDataset(
-            urls=path
-        ).shuffle(1000
+                urls=path, shardshuffle=True
+        ).shuffle(buffer_size
         ).decode('rgb8', wds.autodecode.basichandlers, #basic handler converts .txt from bytes to string
         ).map(process_batch_dict
         ).rename(image='jpg', labels='txt'
@@ -334,7 +350,8 @@ class WebDatasetLoadImagesAndLabels(IterableDataset):
                     shapes[i] = [1, 1 / mini]
 
             self.batch_shapes = np.ceil(np.array(shapes) * img_size / stride + pad).astype(int) * stride
-
+        n_samples = sum([len(self.im_files[tarpath]) for tarpath in self.im_files.keys()])
+        self.web_dataset = self.web_dataset.with_length(n_samples)
 
     def check_cache_ram(self, safety_margin=0.1, prefix=""):
         """Checks if available RAM is sufficient for caching images, adjusting for a safety margin."""
@@ -766,6 +783,17 @@ class WebDatasetLoadImagesAndLabels(IterableDataset):
     def collate_fn(batch):
         """Batches images, labels, paths, and shapes, assigning unique indices to targets in merged label tensor."""
         imgs, labels, paths, shapes = batch
+        for i, lb in enumerate(labels):
+            lb[:, 0] = i  # add target image index for build_targets()
+        labels = torch.cat(labels, 0)
+        paths = tuple(paths)
+        return imgs, labels, paths, shapes
+
+
+    @staticmethod
+    def second_collate_webdataset_fn(batch):
+        imgs, labels, paths, shapes = zip(*batch)
+        breakpoint()
         for i, lb in enumerate(labels):
             lb[:, 0] = i  # add target image index for build_targets()
         labels = torch.cat(labels, 0)

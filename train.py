@@ -269,6 +269,8 @@ def train(hyp, opt, device, callbacks, use_webds=False):
             prefix=colorstr("train: "),
             seed=opt.seed,
             cache_path=opt.train_cache_path,
+            buffer_size=opt.webds_buffer_size,
+            prefetch_factor=opt.prefetch_factor
         )
     else:
         # Trainloader
@@ -311,6 +313,8 @@ def train(hyp, opt, device, callbacks, use_webds=False):
                 pad=0.5,
                 prefix=colorstr("val: "),
                 cache_path=opt.validation_cache_path,
+                buffer_size=opt.webds_buffer_size,
+                prefetch_factor=opt.prefetch_factor
             )[0]
         else:
             val_loader = create_dataloader(
@@ -352,7 +356,10 @@ def train(hyp, opt, device, callbacks, use_webds=False):
 
     # Start training
     t0 = time.time()
-    nb = len(train_loader)  # number of batches
+    if opt.use_webds:
+        nb = len(dataset)
+    else:
+        nb = len(train_loader)  # number of batches
     nw = max(round(hyp["warmup_epochs"] * nb), 100)  # number of warmup iterations, max(3 epochs, 100 iterations)
     # nw = min(nw, (epochs - start_epoch) / 2 * nb)  # limit warmup to < 1/2 of training
     last_opt_step = -1
@@ -365,7 +372,7 @@ def train(hyp, opt, device, callbacks, use_webds=False):
     callbacks.run("on_train_start")
     LOGGER.info(
         f'Image sizes {imgsz} train, {imgsz} val\n'
-        f'Using {train_loader.num_workers * WORLD_SIZE} dataloader workers\n'
+        f'Using {opt.workers * WORLD_SIZE} dataloader workers\n'
         f"Logging results to {colorstr('bold', save_dir)}\n"
         f'Starting training for {epochs} epochs...'
     )
@@ -606,6 +613,8 @@ def parse_opt(known=False):
     parser.add_argument("--use-webds", action="store_true", help="My arg to use web dataset")
     parser.add_argument("--train-cache-path", type=str, help="Where to store labels cache for webdataset training data")
     parser.add_argument("--validation-cache-path", type=str, help="Where to store labels cache for webdataset validation data")
+    parser.add_argument("--webds-buffer-size", type=int, help="size of web dataset shuffle buffer")
+    parser.add_argument("--prefetch-factor", type=int, help="prefetch factor passed to torch dataloader")
     
     return parser.parse_known_args()[0] if known else parser.parse_args()
 
