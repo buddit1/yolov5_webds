@@ -114,7 +114,7 @@ def create_webdataloader(
             image_weights=image_weights,
             prefix=prefix,
             rank=rank,
-            cache_path=cache_path
+            cache_path=cache_path,
             buffer_size=buffer_size
         )
 
@@ -130,7 +130,7 @@ def create_webdataloader(
     #breakpoint()
     return loader(
         dataset,
-        batch_size=16,
+        batch_size=2,
         num_workers=nw,
         sampler=sampler,
         pin_memory=PIN_MEMORY,
@@ -139,7 +139,7 @@ def create_webdataloader(
         worker_init_fn=seed_worker,
         generator=generator,
         prefetch_factor=prefetch_factor
-        ), dataset #.unbatched().shuffle(buffer_size).batched(batch_size), dataset
+        ).unbatched().shuffle(buffer_size).batched(batch_size), dataset
 
 
 def process_batch_dict(f):
@@ -383,27 +383,27 @@ class WebDatasetLoadImagesAndLabels(IterableDataset):
                 with tarfile.open(tarpath) as f:
                     f.extractall(tmpdir)
                     with Pool(NUM_THREADS) as pool:
-                        # pbar = tqdm(
-                        #     pool.imap(verify_image_label, zip(repeat(tmpdir), self.im_files[tarpath], self.label_files[tarpath], repeat(prefix))),
-                        #     desc=desc,
-                        #     total=len(self.im_files[tarpath]),
-                        #     bar_format=TQDM_BAR_FORMAT,
-                        # )
-                        results = [[] for _ in range(9)]
-                        for args in zip(repeat(tmpdir), self.im_files[tarpath], self.label_files[tarpath], repeat(prefix)):
-                            im_file, lb, shape, segments, nm_f, nf_f, ne_f, nc_f, msg = verify_image_label(args)
-                        # for im_file, lb, shape, segments, nm_f, nf_f, ne_f, nc_f, msg in pbar:
+                         pbar = tqdm(
+                             pool.imap(verify_image_label, zip(repeat(tmpdir), self.im_files[tarpath], self.label_files[tarpath], repeat(prefix))),
+                             desc=desc,
+                             total=len(self.im_files[tarpath]),
+                             bar_format=TQDM_BAR_FORMAT,
+                         )
+                        #results = [[] for _ in range(9)]
+                        #for args in zip(repeat(tmpdir), self.im_files[tarpath], self.label_files[tarpath], repeat(prefix)):
+                        #    im_file, lb, shape, segments, nm_f, nf_f, ne_f, nc_f, msg = verify_image_label(args)
+                         for im_file, lb, shape, segments, nm_f, nf_f, ne_f, nc_f, msg in pbar:
                             nm += nm_f
                             nf += nf_f
                             ne += ne_f
                             nc += nc_f
                             if im_file:
                                 x[os.path.join(tarpath, im_file)] = [lb, shape, segments]
-                            # if msg:
-                            #     msgs.append(msg)
-                        #     pbar.desc = f"{desc} {nf} images, {nm + ne} backgrounds, {nc} corrupt"
-                        # # pool.join()
-                # pbar.close()
+                            if msg:
+                                msgs.append(msg)
+                            pbar.desc = f"{desc} {nf} images, {nm + ne} backgrounds, {nc} corrupt"
+                         # pool.join()
+                pbar.close()
         if msgs:
             LOGGER.info("\n".join(msgs))
         if nf == 0:
@@ -782,6 +782,7 @@ class WebDatasetLoadImagesAndLabels(IterableDataset):
     @staticmethod
     def collate_fn(batch):
         """Batches images, labels, paths, and shapes, assigning unique indices to targets in merged label tensor."""
+        #breakpoint()
         imgs, labels, paths, shapes = batch
         for i, lb in enumerate(labels):
             lb[:, 0] = i  # add target image index for build_targets()
@@ -793,12 +794,25 @@ class WebDatasetLoadImagesAndLabels(IterableDataset):
     @staticmethod
     def second_collate_webdataset_fn(batch):
         imgs, labels, paths, shapes = zip(*batch)
-        breakpoint()
-        for i, lb in enumerate(labels):
+        new_imgs = []
+        new_labels = []
+        new_paths = []
+        for im in imgs:
+            new_imgs += im
+        for lb in labels:
+            new_labels += lb
+        for p in paths:
+            new_paths += p
+        new_shapes = [[] for _ in range(len(new_imgs))]
+        #for shape in shapes:
+        #    new_shapes += shapes
+
+        #breakpoint()
+        for i, lb in enumerate(new_labels):
             lb[:, 0] = i  # add target image index for build_targets()
-        labels = torch.cat(labels, 0)
-        paths = tuple(paths)
-        return imgs, labels, paths, shapes
+        labels = torch.cat(new_labels, 0)
+        paths = tuple(new_paths)
+        return new_imgs, new_labels, new_paths, new_shapes
 
 
     @staticmethod
